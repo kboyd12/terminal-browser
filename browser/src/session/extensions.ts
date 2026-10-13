@@ -8,9 +8,14 @@ import { ElectronChromeExtensions } from "electron-chrome-extensions";
 
 import type { Tab, TabManager } from "./tabs";
 
+export interface ExtensionAction {
+  extensionId: string;
+  label: string;
+}
+
 interface Manifest {
-  action?: { default_popup?: string };
-  browser_action?: { default_popup?: string };
+  action?: { default_popup?: string; default_title?: string };
+  browser_action?: { default_popup?: string; default_title?: string };
 }
 
 const WARNING_LEVEL = 2;
@@ -123,6 +128,16 @@ export class ExtensionSupport {
     return failures;
   }
 
+  actions(): ExtensionAction[] {
+    return [...this.loaded.values()]
+      .filter((extension) => popupPage(extension))
+      .map((extension) => {
+        const manifest = extension.manifest as Manifest;
+        const title = manifest.action?.default_title ?? manifest.browser_action?.default_title;
+        return { extensionId: extension.id, label: title || extension.name };
+      });
+  }
+
   popupUrl(extensionId: string): string | null {
     const extension = this.target.extensions.getExtension(extensionId);
     const page = extension && popupPage(extension);
@@ -172,6 +187,10 @@ export class ExtensionWindow {
     private readonly tabs: TabManager,
   ) {
     support.attach(this);
+  }
+
+  actions(): ExtensionAction[] {
+    return this.support.actions();
   }
 
   focus() {

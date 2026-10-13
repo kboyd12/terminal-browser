@@ -1529,6 +1529,12 @@ class Session {
           },
         ]
         : []),
+      ...(this.extensions?.actions() ?? []).map((action) => ({
+        id: `extension:${action.extensionId}`,
+        label: action.label,
+        shortcut: "",
+        run: () => this.extensions?.openPopup(action.extensionId),
+      })),
       command("settings.open"),
     ];
   }
