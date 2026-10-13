@@ -20,6 +20,9 @@ importers:
       '@zenbu-labs/pixel':
         specifier: workspace:*
         version: link:../pixel/packages/pixel
+      electron-chrome-extensions:
+        specifier: 4.9.0
+        version: 4.9.0
       micromark:
         specifier: ^4.0.2
         version: 4.0.2
@@ -956,6 +959,9 @@ packages:
       sqlite3:
         optional: true
 
+  electron-chrome-extensions@4.9.0:
+    resolution: {integrity: sha512-4kLlh4sPPF0ieOy/Gw7A7KrmqB07megDLqOWAWXdFLAYu+2AeOGME6uOBa80NZLbKgTqBvrsVDZ+epdszRm/EQ==}
+
   end-of-stream@1.4.5:
     resolution: {integrity: sha512-ooEGc6HP26xXq/N+GCGOT0JKCLDGrq2bQUZrQ7gyrJiZANJ/8YDTxTpQBXGMn+WbIQXNVpyWymm7KYVICQnyOg==}
 
@@ -1721,6 +1727,12 @@ snapshots:
     optionalDependencies:
       '@types/better-sqlite3': 7.6.13
       better-sqlite3: 12.11.1
+
+  electron-chrome-extensions@4.9.0:
+    dependencies:
+      debug: 4.4.3
+    transitivePeerDependencies:
+      - supports-color
 
   end-of-stream@1.4.5:
     dependencies:
