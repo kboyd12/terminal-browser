@@ -1,0 +1,28 @@
+diff --git a/dist/cjs/index.js b/dist/cjs/index.js
+index b4242b0b847d33d8544832bfb2d8723a884a3072..4626bbed00a16fad8f77a8496dc3b4d72fd13bce 100644
+--- a/dist/cjs/index.js
++++ b/dist/cjs/index.js
+@@ -767,7 +767,8 @@ var _WindowsAPI = class _WindowsAPI {
+     return Array.from(this.ctx.store.windows).map(this.getWindowDetails.bind(this));
+   }
+   async create(event, details) {
+-    const win = await this.ctx.store.createWindow(event, details);
++    const urls = details?.url === void 0 ? void 0 : [].concat(details.url).map((url) => validateExtensionUrl(url, event.extension));
++    const win = await this.ctx.store.createWindow(event, urls ? { ...details, url: Array.isArray(details.url) ? urls : urls[0] } : details);
+     return this.getWindowDetails(win);
+   }
+   async update(event, windowId, updateProperties = {}) {
+diff --git a/dist/esm/index.mjs b/dist/esm/index.mjs
+index dc598ce8f74c1e813c4014ecf8fc6ca5809f4ba5..ebfa20190921944bf646f1a99b97223d2797a78c 100644
+--- a/dist/esm/index.mjs
++++ b/dist/esm/index.mjs
+@@ -730,7 +730,8 @@ var _WindowsAPI = class _WindowsAPI {
+     return Array.from(this.ctx.store.windows).map(this.getWindowDetails.bind(this));
+   }
+   async create(event, details) {
+-    const win = await this.ctx.store.createWindow(event, details);
++    const urls = details?.url === void 0 ? void 0 : [].concat(details.url).map((url) => validateExtensionUrl(url, event.extension));
++    const win = await this.ctx.store.createWindow(event, urls ? { ...details, url: Array.isArray(details.url) ? urls : urls[0] } : details);
+     return this.getWindowDetails(win);
+   }
+   async update(event, windowId, updateProperties = {}) {
