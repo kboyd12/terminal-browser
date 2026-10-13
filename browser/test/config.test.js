@@ -203,16 +203,41 @@ test("suggestion feeds parse the OpenSearch array and the Ecosia object shapes",
 
 function tempManager() {
   const store = tempStore();
+  const toasts = [];
   const host = {
     requestRender() {},
     settingsChanged() {},
-    toast() {},
+    toast: (text, state) => toasts.push({ text, state }),
     overlayOpened() {},
     overlayClosed() {},
     release: () => ({ version: "dev", latest: null, upgrade: "terminal-browser upgrade" }),
   };
-  return { manager: new SettingsManager(host, store.files), store };
+  return { manager: new SettingsManager(host, store.files), store, toasts };
 }
+
+test("extension paths default to none and resolve against home and the settings file", () => {
+  const { manager, store } = tempManager();
+  assert.deepEqual(manager.extensionPaths(), []);
+
+  fs.writeFileSync(
+    store.files.settings,
+    JSON.stringify({ "extensions.paths": ["~/extensions/lastpass", "unpacked/one", "/opt/two"] }),
+  );
+  assert.deepEqual(manager.extensionPaths(), [
+    path.join(os.homedir(), "extensions/lastpass"),
+    path.join(path.dirname(store.files.settings), "unpacked/one"),
+    "/opt/two",
+  ]);
+});
+
+test("extension paths that are not a list of strings load nothing and say why", () => {
+  const { manager, store, toasts } = tempManager();
+  fs.writeFileSync(store.files.settings, JSON.stringify({ "extensions.paths": "~/extensions/lastpass" }));
+  assert.deepEqual(manager.extensionPaths(), []);
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0].state, "failed");
+  assert.match(toasts[0].text, /extensions\.paths/);
+});
 
 test("recording shows the chord until enter commits it and escape drops it", () => {
   const { manager } = tempManager();
