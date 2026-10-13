@@ -80,6 +80,10 @@ export class ExtensionSupport {
   private readonly windows: ExtensionWindow[] = [];
 
   constructor(private readonly target: ElectronSession) {
+    // extensions like LastPass switch to their desktop-app code paths when the user agent mentions Electron
+    const userAgent = target.getUserAgent().replace(/ (terminal-browser|Electron)\/\S+/g, "");
+    target.setUserAgent(userAgent);
+    app.userAgentFallback = userAgent;
     this.api = new ElectronChromeExtensions({
       license: "GPL-3.0",
       session: target,
