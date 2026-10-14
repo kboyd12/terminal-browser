@@ -1,5 +1,5 @@
 diff --git a/dist/cjs/index.js b/dist/cjs/index.js
-index b4242b0b847d33d8544832bfb2d8723a884a3072..4626bbed00a16fad8f77a8496dc3b4d72fd13bce 100644
+index b4242b0b847d33d8544832bfb2d8723a884a3072..24ed54236fc823189f86e65f08c88f699ea49dce 100644
 --- a/dist/cjs/index.js
 +++ b/dist/cjs/index.js
 @@ -767,7 +767,8 @@ var _WindowsAPI = class _WindowsAPI {
@@ -12,8 +12,16 @@ index b4242b0b847d33d8544832bfb2d8723a884a3072..4626bbed00a16fad8f77a8496dc3b4d7
      return this.getWindowDetails(win);
    }
    async update(event, windowId, updateProperties = {}) {
+@@ -901,7 +902,6 @@ var _TabsAPI = class _TabsAPI {
+       this.onRemoved(tabId);
+     });
+     this.onCreated(tabId);
+-    this.onActivated(tabId);
+     d4(`Observing tab[${tabId}][${tab.getType()}] ${tab.getURL()}`);
+   }
+   createTabDetails(tab) {
 diff --git a/dist/esm/index.mjs b/dist/esm/index.mjs
-index dc598ce8f74c1e813c4014ecf8fc6ca5809f4ba5..ebfa20190921944bf646f1a99b97223d2797a78c 100644
+index dc598ce8f74c1e813c4014ecf8fc6ca5809f4ba5..b3527d59c65dfebcceed5aa4a397ad7907b4cfa5 100644
 --- a/dist/esm/index.mjs
 +++ b/dist/esm/index.mjs
 @@ -730,7 +730,8 @@ var _WindowsAPI = class _WindowsAPI {
@@ -26,3 +34,11 @@ index dc598ce8f74c1e813c4014ecf8fc6ca5809f4ba5..ebfa20190921944bf646f1a99b97223d
      return this.getWindowDetails(win);
    }
    async update(event, windowId, updateProperties = {}) {
+@@ -864,7 +865,6 @@ var _TabsAPI = class _TabsAPI {
+       this.onRemoved(tabId);
+     });
+     this.onCreated(tabId);
+-    this.onActivated(tabId);
+     d4(`Observing tab[${tabId}][${tab.getType()}] ${tab.getURL()}`);
+   }
+   createTabDetails(tab) {
