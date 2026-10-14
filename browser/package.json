@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@zenbu-labs/pixel": "workspace:*",
+    "electron-chrome-extensions": "4.9.0",
     "micromark": "^4.0.2",
     "micromark-extension-gfm": "^3.0.0",
     "shared": "workspace:*",

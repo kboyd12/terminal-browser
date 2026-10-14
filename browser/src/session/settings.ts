@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -12,6 +13,7 @@ import {
   formatChord,
   isCommandId,
   isSettingKey,
+  jsonText,
   Keymap,
   SETTING_KEYS,
   SETTINGS,
@@ -81,6 +83,26 @@ function homeRelative(file: string): string {
   return file.startsWith(home + path.sep) ? `~${file.slice(home.length)}` : file;
 }
 
+// Lists are kept out of SETTINGS because the settings modal and `config set` only edit strings.
+export const EXTENSION_PATHS_KEY = "extensions.paths";
+
+const settingsObject = jsonText.pipe(z.record(z.string(), z.unknown()));
+const extensionPaths = z.array(z.string().min(1)).default([]);
+
+function readSettingsObject(file: string): Record<string, unknown> {
+  let text = "";
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {}
+  const parsed = settingsObject.safeParse(text.trim() ? text : "{}");
+  return parsed.success ? parsed.data : {};
+}
+
+function absoluteFrom(file: string, entry: string): string {
+  if (entry === "~" || entry.startsWith(`~${path.sep}`)) return path.join(os.homedir(), entry.slice(1));
+  return path.resolve(path.dirname(file), entry);
+}
+
 export class SettingsManager {
   private readonly config: ConfigStore;
   private values: Settings;
@@ -108,6 +130,17 @@ export class SettingsManager {
 
   get keymap(): Keymap {
     return this.map;
+  }
+
+  extensionPaths(): string[] {
+    const file = this.config.files.settings;
+    const parsed = extensionPaths.safeParse(readSettingsObject(file)[EXTENSION_PATHS_KEY]);
+    if (parsed.success) return parsed.data.map((entry) => absoluteFrom(file, entry));
+    this.host.toast(
+      ` ${path.basename(file)} › ${EXTENSION_PATHS_KEY}: ${parsed.error.issues[0].message}`,
+      "failed",
+    );
+    return [];
   }
 
   get isOpen(): boolean {

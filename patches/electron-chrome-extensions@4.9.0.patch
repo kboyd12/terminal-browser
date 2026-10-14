@@ -1,0 +1,44 @@
+diff --git a/dist/cjs/index.js b/dist/cjs/index.js
+index b4242b0b847d33d8544832bfb2d8723a884a3072..24ed54236fc823189f86e65f08c88f699ea49dce 100644
+--- a/dist/cjs/index.js
++++ b/dist/cjs/index.js
+@@ -767,7 +767,8 @@ var _WindowsAPI = class _WindowsAPI {
+     return Array.from(this.ctx.store.windows).map(this.getWindowDetails.bind(this));
+   }
+   async create(event, details) {
+-    const win = await this.ctx.store.createWindow(event, details);
++    const urls = details?.url === void 0 ? void 0 : [].concat(details.url).map((url) => validateExtensionUrl(url, event.extension));
++    const win = await this.ctx.store.createWindow(event, urls ? { ...details, url: Array.isArray(details.url) ? urls : urls[0] } : details);
+     return this.getWindowDetails(win);
+   }
+   async update(event, windowId, updateProperties = {}) {
+@@ -901,7 +902,6 @@ var _TabsAPI = class _TabsAPI {
+       this.onRemoved(tabId);
+     });
+     this.onCreated(tabId);
+-    this.onActivated(tabId);
+     d4(`Observing tab[${tabId}][${tab.getType()}] ${tab.getURL()}`);
+   }
+   createTabDetails(tab) {
+diff --git a/dist/esm/index.mjs b/dist/esm/index.mjs
+index dc598ce8f74c1e813c4014ecf8fc6ca5809f4ba5..b3527d59c65dfebcceed5aa4a397ad7907b4cfa5 100644
+--- a/dist/esm/index.mjs
++++ b/dist/esm/index.mjs
+@@ -730,7 +730,8 @@ var _WindowsAPI = class _WindowsAPI {
+     return Array.from(this.ctx.store.windows).map(this.getWindowDetails.bind(this));
+   }
+   async create(event, details) {
+-    const win = await this.ctx.store.createWindow(event, details);
++    const urls = details?.url === void 0 ? void 0 : [].concat(details.url).map((url) => validateExtensionUrl(url, event.extension));
++    const win = await this.ctx.store.createWindow(event, urls ? { ...details, url: Array.isArray(details.url) ? urls : urls[0] } : details);
+     return this.getWindowDetails(win);
+   }
+   async update(event, windowId, updateProperties = {}) {
+@@ -864,7 +865,6 @@ var _TabsAPI = class _TabsAPI {
+       this.onRemoved(tabId);
+     });
+     this.onCreated(tabId);
+-    this.onActivated(tabId);
+     d4(`Observing tab[${tabId}][${tab.getType()}] ${tab.getURL()}`);
+   }
+   createTabDetails(tab) {

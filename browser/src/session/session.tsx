@@ -80,6 +80,7 @@ import { clampDevtoolsFraction, computeLayout, dividerFraction, recordBarHeight 
 // Installed builds run from a dist root; anything else is a source checkout.
 const DEV_BUILD = !process.env.TERMINAL_BROWSER_DIST_ROOT;
 import type { DevtoolsPlacement, SurfaceLayout } from "./layout";
+import { ExtensionWindow, extensionSupport } from "./extensions";
 import { SettingsManager } from "./settings";
 import { Telemetry } from "../telemetry";
 import { fetchSuggestions } from "./suggest";
@@ -220,6 +221,7 @@ class Session {
 
   private root: Root | null = null;
   private registry: Registry | null = null;
+  private extensions: ExtensionWindow | null = null;
 
   private layout: ChromeLayout | null = null;
   private surfaceLayout: SurfaceLayout | null = null;
@@ -295,6 +297,7 @@ class Session {
     this.tabs = new TabManager(
       {
         onActivated: () => {
+          if (this.tabs.active) this.extensions?.select(this.tabs.active);
           this.pageMenu = null;
           this.reconcileRecord();
           this.recalculateLayout();
@@ -356,7 +359,9 @@ class Session {
       },
       onColors: () => this.render(),
       onFocus: (focused) => {
-        if (focused) this.telemetry.used();
+        if (!focused) return;
+        this.telemetry.used();
+        this.extensions?.focus();
       },
       onVisible: (visible) => {
         if (this.sessionHidden === !visible) return;
@@ -372,6 +377,7 @@ class Session {
     this.settings.watch();
     this.recalculateLayout();
     this.root.setPointerShape("default");
+    await this.attachExtensions();
     this.tabs.create(this.fallbackState.url);
     this.registry = new Registry({
       key: this.ctx.key,
@@ -409,6 +415,17 @@ class Session {
     this.registry.setCdpPort(this.ctx.cdpPort);
     void this.findOwnPane();
     this.render();
+  }
+
+  private async attachExtensions() {
+    const paths = this.settings.extensionPaths();
+    if (paths.length === 0) return;
+    const support = extensionSupport(this.partition);
+    for (const failure of await support.load(paths)) {
+      this.showToast("Could not load extension", "failed", failure);
+    }
+    this.extensions = new ExtensionWindow(support, this.tabs);
+    this.extensions.focus();
   }
 
   private findOwnPane(): Promise<Pane | null> {
@@ -451,6 +468,8 @@ class Session {
     this.shownRecord = null;
     this.registry?.dispose();
     this.registry = null;
+    this.extensions?.dispose();
+    this.extensions = null;
     this.settings.dispose();
     this.tabs.stopAll();
     if (this.root) this.root.stop(code);
@@ -502,7 +521,11 @@ class Session {
   }
 
   private readonly tabActions: TabActions = {
-    state: (id, state) => this.tabs.stateChanged(id, state),
+    state: (id, state) => {
+      this.tabs.stateChanged(id, state);
+      const tab = this.tabs.get(id);
+      if (tab) this.extensions?.track(tab);
+    },
     openWindow: (id, details) => this.tabs.openWindow(id, details),
     contextMenu: (id, params) => this.tabs.contextMenu(id, params),
     download: (progress) => this.showDownload(progress),
@@ -1506,6 +1529,12 @@ class Session {
           },
         ]
         : []),
+      ...(this.extensions?.actions() ?? []).map((action) => ({
+        id: `extension:${action.extensionId}`,
+        label: action.label,
+        shortcut: "",
+        run: () => this.extensions?.openPopup(action.extensionId),
+      })),
       command("settings.open"),
     ];
   }
