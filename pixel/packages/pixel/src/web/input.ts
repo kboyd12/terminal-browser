@@ -1,15 +1,25 @@
 import { clipboard, ClipboardItem, nativeImage } from "electron";
 import type { WebContents } from "electron";
 import type { EngineKeyEvent, PastedImage, PointerEvent, WheelEvent } from "../react";
+import type { ChildFramePoint } from "./child-frames";
 
 export interface InputTarget {
   contents(): WebContents;
   scale(): number;
   focus(): Promise<void> | void;
-  cdp(method: string, params?: Record<string, unknown>): Promise<unknown>;
+  cdp(method: string, params?: Record<string, unknown>, sessionId?: string): Promise<unknown>;
+  frameAt?(x: number, y: number): Promise<ChildFramePoint | null>;
 }
 
 type SendableInputEvent = Parameters<WebContents["sendInputEvent"]>[0];
+type WheelInputEvent = Electron.MouseWheelInputEvent;
+
+interface WheelRoute {
+  x: number;
+  y: number;
+  at: number;
+  frame: Promise<ChildFramePoint | null>;
+}
 
 export class PageInput {
   private readonly target: InputTarget;
@@ -25,6 +35,8 @@ export class PageInput {
   private sentKeys = new Set<string>();
   private superHeld = false;
   private focusGate: Promise<void> | null = null;
+  private wheelQueue: Promise<void> = Promise.resolve();
+  private wheelRoute: WheelRoute | null = null;
 
   constructor(target: InputTarget) {
     this.target = target;
@@ -114,7 +126,7 @@ export class PageInput {
     this.wheelRemainderX -= deltaX;
     this.wheelRemainderY -= deltaY;
     if (deltaX === 0 && deltaY === 0) return;
-    this.send({
+    this.sendWheel({
       type: "mouseWheel",
       x: this.lastX,
       y: this.lastY,
@@ -134,7 +146,7 @@ export class PageInput {
     const ticksY = -Math.sign(event.deltaY);
     if (ticksX === 0 && ticksY === 0) return;
     const step = WHEEL_DETENT_PX;
-    this.send({
+    this.sendWheel({
       type: "mouseWheel",
       x: this.lastX,
       y: this.lastY,
@@ -146,6 +158,57 @@ export class PageInput {
       canScroll: true,
       modifiers: this.pointerModifiers(event.mods),
     });
+  }
+
+  private sendWheel(event: WheelInputEvent) {
+    if (!this.target.frameAt) {
+      this.send(event);
+      return;
+    }
+    const gate = this.focusGate;
+    const sentAt = Date.now();
+    this.wheelQueue = this.wheelQueue
+      .then(() => gate)
+      .then(() => this.wheelFrame(event.x, event.y, sentAt))
+      .then((frame) => {
+        if (!frame) {
+          this.target.contents().sendInputEvent(event);
+          return;
+        }
+        void this.target
+          .cdp(
+            "Input.dispatchMouseEvent",
+            {
+              type: "mouseWheel",
+              x: frame.x,
+              y: frame.y,
+              deltaX: -(event.deltaX ?? 0),
+              deltaY: -(event.deltaY ?? 0),
+              modifiers: cdpModifierMask(event.modifiers ?? []),
+            },
+            frame.sessionId,
+          )
+          .catch(() => {
+            this.wheelRoute = null;
+          });
+      })
+      .catch(() => {
+        this.wheelRoute = null;
+      });
+  }
+
+  private wheelFrame(x: number, y: number, sentAt: number) {
+    const route = this.wheelRoute;
+    if (route && route.x === x && route.y === y && sentAt - route.at < WHEEL_LATCH_MS) {
+      route.at = sentAt;
+      return route.frame;
+    }
+    const frame = Promise.race([
+      this.target.frameAt!(x, y),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), WHEEL_ROUTE_TIMEOUT_MS)),
+    ]);
+    this.wheelRoute = { x, y, at: sentAt, frame };
+    return frame;
   }
 
   private pinch(event: WheelEvent) {
@@ -353,6 +416,8 @@ const SELECTION_SNIPPET = `(() => {
 
 
 const WHEEL_DETENT_PX = process.platform === "darwin" ? 40 : 120;
+const WHEEL_LATCH_MS = 500;
+const WHEEL_ROUTE_TIMEOUT_MS = 200;
 
 function wholeDelta(value: number) {
   return value < 0 ? Math.ceil(value) : Math.floor(value);
@@ -362,6 +427,16 @@ function cdpModifiers(mods: { shift: boolean; alt: boolean; ctrl: boolean; super
   return (
     (mods.alt ? 1 : 0) | (mods.ctrl ? 2 : 0) | (mods.super ? 4 : 0) | (mods.shift ? 8 : 0)
   );
+}
+
+function cdpModifierMask(modifiers: Electron.InputEvent["modifiers"]) {
+  const held = new Set(modifiers);
+  return cdpModifiers({
+    shift: held.has("shift"),
+    alt: held.has("alt"),
+    ctrl: held.has("ctrl"),
+    super: held.has("meta"),
+  });
 }
 
 const EDITING_KEY_INFO: Record<string, { key: string; code: string; keyCode: number }> = {
