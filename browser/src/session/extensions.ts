@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { app, BaseWindow, BrowserWindow, session as electronSession } from "electron";
+import { app, BaseWindow, BrowserWindow, ipcMain, session as electronSession } from "electron";
 import type { Extension, Session as ElectronSession, ServiceWorkerMain, WebContents } from "electron";
 import { appLog } from "@zenbu-labs/pixel";
 import { ElectronChromeExtensions } from "electron-chrome-extensions";
+import { z } from "zod";
 
+import { jsonText } from "shared";
 import type { Tab, TabManager } from "./tabs";
 
 export interface ExtensionAction {
@@ -21,25 +23,75 @@ interface Manifest {
 const WARNING_LEVEL = 2;
 const MOUNT_POLL_MS = 10;
 const MOUNT_TIMEOUT_MS = 5000;
+const RESTORE_TIMEOUT_MS = 3000;
+const SAVE_CONTENT_SCRIPTS = "terminal-browser:save-content-scripts";
+const RESTORE_CONTENT_SCRIPTS = "terminal-browser:restore-content-scripts";
+const CONTENT_SCRIPTS_RESTORED = "terminal-browser:content-scripts-restored";
 
 // Chromium also exposes extension APIs as `browser`, which the extension library leaves unpatched,
 // and some extensions (LastPass) read `browser` before `chrome`.
-const BROWSER_NAMESPACE_PRELOAD = `if (process.type === "service-worker" || location.href.startsWith("chrome-extension://")) {
-  require("electron").contextBridge.executeInMainWorld({
-    func: () => Object.defineProperty(globalThis, "browser", { value: globalThis.chrome, configurable: true, writable: true }),
+// Electron never stores content scripts registered with persistAcrossSessions, so they are mirrored
+// to disk here and registered again when the extension loads.
+const EXTENSION_PRELOAD = `if (process.type === "service-worker" || location.href.startsWith("chrome-extension://")) {
+  const { contextBridge, ipcRenderer } = require("electron");
+  contextBridge.executeInMainWorld({
+    func: (save, onRestore, restored) => {
+      Object.defineProperty(globalThis, "browser", { value: globalThis.chrome, configurable: true, writable: true });
+      const scripting = globalThis.chrome.scripting;
+      if (!scripting) return;
+      const register = scripting.registerContentScripts.bind(scripting);
+      const persist = () =>
+        scripting
+          .getRegisteredContentScripts()
+          .then((scripts) => save(scripts.filter((script) => script.persistAcrossSessions !== false)));
+      for (const name of ["registerContentScripts", "updateContentScripts", "unregisterContentScripts"]) {
+        const original = scripting[name].bind(scripting);
+        scripting[name] = (...args) => {
+          if (typeof args[args.length - 1] === "function") {
+            const callback = args.pop();
+            return original(...args, (...results) => {
+              void persist();
+              callback(...results);
+            });
+          }
+          const result = original(...args);
+          result.then(persist, () => {});
+          return result;
+        };
+      }
+      onRestore((scripts) =>
+        scripting
+          .getRegisteredContentScripts()
+          .then((registered) => {
+            const ids = new Set(registered.map((script) => script.id));
+            const missing = scripts.filter((script) => !ids.has(script.id));
+            return missing.length > 0 ? register(missing) : undefined;
+          })
+          .finally(restored),
+      );
+    },
+    args: [
+      (scripts) => ipcRenderer.send(${JSON.stringify(SAVE_CONTENT_SCRIPTS)}, scripts),
+      (listener) => ipcRenderer.on(${JSON.stringify(RESTORE_CONTENT_SCRIPTS)}, (_event, scripts) => listener(scripts)),
+      () => ipcRenderer.send(${JSON.stringify(CONTENT_SCRIPTS_RESTORED)}),
+    ],
   });
 }
 `;
 
+const contentScripts = z.array(z.looseObject({ id: z.string() }));
+const savedContentScripts = jsonText.pipe(contentScripts);
+type ContentScripts = z.infer<typeof contentScripts>;
+
 const supports = new Map<ElectronSession, ExtensionSupport>();
 
-let browserNamespaceFile: string | null = null;
-function browserNamespacePreload(): string {
-  if (!browserNamespaceFile) {
-    browserNamespaceFile = path.join(app.getPath("userData"), "extension-browser-namespace.js");
-    fs.writeFileSync(browserNamespaceFile, BROWSER_NAMESPACE_PRELOAD);
+let extensionPreloadFile: string | null = null;
+function extensionPreload(): string {
+  if (!extensionPreloadFile) {
+    extensionPreloadFile = path.join(app.getPath("userData"), "extension-preload.js");
+    fs.writeFileSync(extensionPreloadFile, EXTENSION_PRELOAD);
   }
-  return browserNamespaceFile;
+  return extensionPreloadFile;
 }
 
 export function extensionSupport(partition: string | null): ExtensionSupport {
@@ -69,10 +121,22 @@ function ownWindow(contents: WebContents): BaseWindow {
   return window;
 }
 
+function readContentScripts(file: string): ContentScripts {
+  let text = "";
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return [];
+  }
+  const parsed = savedContentScripts.safeParse(text);
+  return parsed.success ? parsed.data : [];
+}
+
 export class ExtensionSupport {
   readonly api: ElectronChromeExtensions;
   private readonly loaded = new Map<string, Extension>();
   private readonly windows: ExtensionWindow[] = [];
+  private readonly listening = new WeakSet<ServiceWorkerMain>();
 
   constructor(private readonly target: ElectronSession) {
     // extensions like LastPass switch to their desktop-app code paths when the user agent mentions Electron
@@ -98,9 +162,9 @@ export class ExtensionSupport {
         for (const owner of this.windows) owner.closeWindow(window);
       },
     });
-    const preload = browserNamespacePreload();
-    target.registerPreloadScript({ id: "browser-namespace-worker", type: "service-worker", filePath: preload });
-    target.registerPreloadScript({ id: "browser-namespace-frame", type: "frame", filePath: preload });
+    const preload = extensionPreload();
+    target.registerPreloadScript({ id: "extension-worker", type: "service-worker", filePath: preload });
+    target.registerPreloadScript({ id: "extension-frame", type: "frame", filePath: preload });
     this.api.on("browser-action-popup-created", (popup) => {
       popup.destroy();
       this.current()?.openPopup(popup.extensionId);
@@ -111,9 +175,17 @@ export class ExtensionSupport {
       }
     });
     target.serviceWorkers.on("running-status-changed", ({ versionId, runningStatus }) => {
-      if (runningStatus !== "running") return;
+      if (runningStatus !== "starting" && runningStatus !== "running") return;
       const worker = target.serviceWorkers.getWorkerFromVersionID(versionId);
-      if (worker?.scope.startsWith("chrome-extension://")) this.keepAlive(worker);
+      if (!worker?.scope.startsWith("chrome-extension://")) return;
+      if (runningStatus === "starting") this.listenTo(worker);
+      else this.keepAlive(worker);
+    });
+    ipcMain.on(SAVE_CONTENT_SCRIPTS, (event, scripts: unknown) => {
+      const url = event.senderFrame?.url;
+      if (url?.startsWith("chrome-extension://") && event.sender.session === target) {
+        this.saveContentScripts(new URL(url).host, scripts);
+      }
     });
   }
 
@@ -125,6 +197,7 @@ export class ExtensionSupport {
         const extension = await this.target.extensions.loadExtension(path);
         this.loaded.set(path, extension);
         appLog("info", "extensions", `loaded ${extension.name} ${extension.version} (${extension.id}) from ${path}`);
+        await this.restoreContentScripts(extension);
       } catch (error) {
         failures.push(`${path}: ${errorText(error)}`);
       }
@@ -180,6 +253,13 @@ export class ExtensionSupport {
     return this.windows.find((window) => window.owns(contents)) ?? null;
   }
 
+  private listenTo(worker: ServiceWorkerMain) {
+    if (this.listening.has(worker)) return;
+    this.listening.add(worker);
+    const extensionId = new URL(worker.scope).host;
+    worker.ipc.on(SAVE_CONTENT_SCRIPTS, (_event, scripts: unknown) => this.saveContentScripts(extensionId, scripts));
+  }
+
   // Electron stops an extension's worker after 30 idle seconds and calls through the extension library don't count
   // as activity, so the worker would restart every 30 seconds and drop replies it still owes to pages.
   private keepAlive(worker: ServiceWorkerMain) {
@@ -187,6 +267,43 @@ export class ExtensionSupport {
       worker.startTask();
     } catch (error) {
       appLog("warn", "extensions", `could not keep ${worker.scope} running: ${errorText(error)}`);
+    }
+  }
+
+  private contentScriptsFile(extensionId: string): string | null {
+    const storage = this.target.storagePath;
+    return storage ? path.join(storage, "Extension Content Scripts", `${extensionId}.json`) : null;
+  }
+
+  private saveContentScripts(extensionId: string, scripts: unknown) {
+    const file = this.contentScriptsFile(extensionId);
+    const parsed = contentScripts.safeParse(scripts);
+    if (!file || !parsed.success) return;
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(parsed.data));
+    } catch (error) {
+      appLog("warn", "extensions", `could not save content scripts of ${extensionId}: ${errorText(error)}`);
+    }
+  }
+
+  private async restoreContentScripts(extension: Extension) {
+    const file = this.contentScriptsFile(extension.id);
+    const scripts = file ? readContentScripts(file) : [];
+    if (scripts.length === 0) return;
+    try {
+      const worker = await this.target.serviceWorkers.startWorkerForScope(extension.url);
+      const restored = await new Promise<boolean>((resolve) => {
+        const timeout = setTimeout(() => resolve(false), RESTORE_TIMEOUT_MS);
+        worker.ipc.once(CONTENT_SCRIPTS_RESTORED, () => {
+          clearTimeout(timeout);
+          resolve(true);
+        });
+        worker.send(RESTORE_CONTENT_SCRIPTS, scripts);
+      });
+      if (!restored) appLog("warn", "extensions", `${extension.name} did not restore its content scripts in time`);
+    } catch (error) {
+      appLog("warn", "extensions", `could not restore content scripts of ${extension.name}: ${errorText(error)}`);
     }
   }
 }
