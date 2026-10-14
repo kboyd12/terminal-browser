@@ -69,15 +69,6 @@ function ownWindow(contents: WebContents): BaseWindow {
   return window;
 }
 
-async function mounted(tab: Tab): Promise<WebContents> {
-  for (let waited = 0; waited < MOUNT_TIMEOUT_MS; waited += MOUNT_POLL_MS) {
-    const handle = tab.ref.current;
-    if (handle) return handle.webContents;
-    await new Promise((resolve) => setTimeout(resolve, MOUNT_POLL_MS));
-  }
-  throw new Error(`tab ${tab.id} did not open`);
-}
-
 export class ExtensionSupport {
   readonly api: ElectronChromeExtensions;
   private readonly loaded = new Map<string, Extension>();
@@ -248,7 +239,7 @@ export class ExtensionWindow {
 
   async openTab(url: string, active: boolean): Promise<WebContents> {
     const tab = this.tabs.create(url, active);
-    const contents = this.closeWithPage(tab, await mounted(tab));
+    const contents = await this.mount(tab);
     // tracked here so the extension library never adds this tab itself, which can select it
     this.track(tab);
     return contents;
@@ -257,7 +248,7 @@ export class ExtensionWindow {
   async openWindow(url: string, active: boolean): Promise<WebContents> {
     const tab = this.tabs.create(url, active);
     this.ownWindowTabs.add(tab.id);
-    const contents = this.closeWithPage(tab, await mounted(tab));
+    const contents = await this.mount(tab);
     this.track(tab);
     return contents;
   }
@@ -267,7 +258,7 @@ export class ExtensionWindow {
     if (!url) return;
     const tab = this.tabs.create(url, true);
     this.popupTabs.add(tab.id);
-    void mounted(tab).then((contents) => this.closeWithPage(tab, contents));
+    this.mount(tab).catch((error) => appLog("warn", "extensions", `popup of ${extensionId}: ${errorText(error)}`));
   }
 
   activate(contents: WebContents) {
@@ -304,11 +295,27 @@ export class ExtensionWindow {
     }
   }
 
-  // a page closing itself (window.close() in an extension popup) leaves its tab behind otherwise
-  private closeWithPage(tab: Tab, contents: WebContents): WebContents {
-    contents.once("destroyed", () => {
+  private async mount(tab: Tab): Promise<WebContents> {
+    try {
+      const contents = await this.mounted(tab);
+      // a page closing itself (window.close() in an extension popup) leaves its tab behind otherwise
+      contents.once("destroyed", () => {
+        if (this.tabs.has(tab.id)) this.tabs.close(tab.id);
+      });
+      return contents;
+    } catch (error) {
       if (this.tabs.has(tab.id)) this.tabs.close(tab.id);
-    });
-    return contents;
+      throw error;
+    }
+  }
+
+  private async mounted(tab: Tab): Promise<WebContents> {
+    for (let waited = 0; waited < MOUNT_TIMEOUT_MS; waited += MOUNT_POLL_MS) {
+      if (!this.tabs.has(tab.id)) throw new Error(`tab ${tab.id} closed before it opened`);
+      const handle = tab.ref.current;
+      if (handle) return handle.webContents;
+      await new Promise((resolve) => setTimeout(resolve, MOUNT_POLL_MS));
+    }
+    throw new Error(`tab ${tab.id} did not open`);
   }
 }
