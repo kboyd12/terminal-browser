@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { app, BaseWindow, BrowserWindow, session as electronSession } from "electron";
-import type { Extension, Session as ElectronSession, WebContents } from "electron";
+import type { Extension, Session as ElectronSession, ServiceWorkerMain, WebContents } from "electron";
 import { appLog } from "@zenbu-labs/pixel";
 import { ElectronChromeExtensions } from "electron-chrome-extensions";
 
@@ -52,6 +52,10 @@ export function extensionSupport(partition: string | null): ExtensionSupport {
     supports.set(target, support);
   }
   return support;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function popupPage(extension: Extension): string | null {
@@ -115,6 +119,11 @@ export class ExtensionSupport {
         appLog(details.level > WARNING_LEVEL ? "error" : "warn", "extensions", `${details.sourceUrl}: ${details.message}`);
       }
     });
+    target.serviceWorkers.on("running-status-changed", ({ versionId, runningStatus }) => {
+      if (runningStatus !== "running") return;
+      const worker = target.serviceWorkers.getWorkerFromVersionID(versionId);
+      if (worker?.scope.startsWith("chrome-extension://")) this.keepAlive(worker);
+    });
   }
 
   async load(paths: string[]): Promise<string[]> {
@@ -126,7 +135,7 @@ export class ExtensionSupport {
         this.loaded.set(path, extension);
         appLog("info", "extensions", `loaded ${extension.name} ${extension.version} (${extension.id}) from ${path}`);
       } catch (error) {
-        failures.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+        failures.push(`${path}: ${errorText(error)}`);
       }
     }
     return failures;
@@ -174,6 +183,16 @@ export class ExtensionSupport {
 
   private ownerOf(contents: WebContents): ExtensionWindow | null {
     return this.windows.find((window) => window.owns(contents)) ?? null;
+  }
+
+  // Electron stops an extension's worker after 30 idle seconds and calls through the extension library don't count
+  // as activity, so the worker would restart every 30 seconds and drop replies it still owes to pages.
+  private keepAlive(worker: ServiceWorkerMain) {
+    try {
+      worker.startTask();
+    } catch (error) {
+      appLog("warn", "extensions", `could not keep ${worker.scope} running: ${errorText(error)}`);
+    }
   }
 }
 
