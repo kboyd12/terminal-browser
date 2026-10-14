@@ -248,13 +248,18 @@ export class ExtensionWindow {
 
   async openTab(url: string, active: boolean): Promise<WebContents> {
     const tab = this.tabs.create(url, active);
-    return this.closeWithPage(tab, await mounted(tab));
+    const contents = this.closeWithPage(tab, await mounted(tab));
+    // tracked here so the extension library never adds this tab itself, which can select it
+    this.track(tab);
+    return contents;
   }
 
   async openWindow(url: string, active: boolean): Promise<WebContents> {
     const tab = this.tabs.create(url, active);
     this.ownWindowTabs.add(tab.id);
-    return this.closeWithPage(tab, await mounted(tab));
+    const contents = this.closeWithPage(tab, await mounted(tab));
+    this.track(tab);
+    return contents;
   }
 
   openPopup(extensionId: string) {
