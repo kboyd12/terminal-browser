@@ -2,6 +2,7 @@ import { BrowserWindow, screen } from "electron";
 import type { EngineKeyEvent, PastedImage, PointerEvent, Surface, WheelEvent } from "../react";
 import { allowClipboardRead, onDownloadFor, routeThroughProxy } from "./browser-session";
 import type { DownloadProgress } from "./browser-session";
+import { ChildFrames } from "./child-frames";
 import { cursorShapeFor } from "./cursor";
 import { DevtoolsWindow } from "./devtools";
 import { FaviconCache } from "./favicon";
@@ -90,6 +91,9 @@ export class PageHost {
   private stopWatchingFrameRate?: () => void;
   private contentFocused = false;
   private readonly input: PageInput;
+  private readonly childFrames = new ChildFrames((method, params, sessionId) =>
+    this.cdp(method, params, sessionId),
+  );
   private readonly clipboardRead: boolean;
   private background: string;
   private pendingPopupSize: { width: number; height: number } | null = null;
@@ -154,9 +158,14 @@ export class PageHost {
       contents: () => this.window.webContents,
       scale: () => this.layout.scale,
       focus: () => this.focusContent(),
-      cdp: async (method, params) => {
+      cdp: async (method, params, sessionId) => {
         await this.attachCdp();
-        return this.cdp(method, params);
+        return this.cdp(method, params, sessionId);
+      },
+      frameAt: async (x, y) => {
+        await this.attachCdp();
+        const zoom = this.window.webContents.getZoomFactor();
+        return this.childFrames.at(x / zoom, y / zoom);
       },
     });
     this.window.webContents.setFrameRate(frameRate());
@@ -303,9 +312,11 @@ export class PageHost {
     if (this.cdpAttached) return;
     this.window.webContents.debugger.attach("1.3");
     this.cdpAttached = true;
-    this.window.webContents.debugger.on("message", (_event, method, params) => {
-      this.cdpEventHandlers.get(method)?.(params);
+    this.window.webContents.debugger.on("message", (_event, method, params, sessionId) => {
+      this.childFrames.onCdpEvent(method, params);
+      if (!sessionId) this.cdpEventHandlers.get(method)?.(params);
     });
+    await this.childFrames.watch();
     await this.cdp("Runtime.enable");
     await this.cdp("Page.enable");
     await this.emulateColorScheme();
@@ -326,8 +337,12 @@ export class PageHost {
     });
   }
 
-  cdp(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.window.webContents.debugger.sendCommand(method, params) as Promise<
+  cdp(
+    method: string,
+    params?: Record<string, unknown>,
+    sessionId?: string,
+  ): Promise<Record<string, unknown>> {
+    return this.window.webContents.debugger.sendCommand(method, params, sessionId) as Promise<
       Record<string, unknown>
     >;
   }
