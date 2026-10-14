@@ -83,7 +83,7 @@ export class ExtensionSupport {
       license: "GPL-3.0",
       session: target,
       createTab: async (details) => {
-        const window = this.windowWithAnchor(details.windowId) ?? this.current();
+        const window = this.windowWithAnchor(details.windowId) ?? this.openWindowOrFail();
         const contents = await window.openTab(details.url ?? "about:blank", details.active !== false);
         return [contents, window.anchor];
       },
@@ -91,7 +91,7 @@ export class ExtensionSupport {
       removeTab: (contents) => this.ownerOf(contents)?.close(contents),
       createWindow: async (details) => {
         const url = Array.isArray(details.url) ? details.url[0] : details.url;
-        const contents = await this.current().openWindow(url ?? "about:blank", details.focused !== false);
+        const contents = await this.openWindowOrFail().openWindow(url ?? "about:blank", details.focused !== false);
         return ownWindow(contents);
       },
       removeWindow: (window) => {
@@ -103,7 +103,7 @@ export class ExtensionSupport {
     target.registerPreloadScript({ id: "browser-namespace-frame", type: "frame", filePath: preload });
     this.api.on("browser-action-popup-created", (popup) => {
       popup.destroy();
-      this.current().openPopup(popup.extensionId);
+      this.current()?.openPopup(popup.extensionId);
     });
     target.serviceWorkers.on("console-message", (_event, details) => {
       if (details.level >= WARNING_LEVEL) {
@@ -162,8 +162,12 @@ export class ExtensionSupport {
     this.windows.push(window);
   }
 
-  private current(): ExtensionWindow {
-    const window = this.windows[this.windows.length - 1];
+  private current(): ExtensionWindow | null {
+    return this.windows[this.windows.length - 1] ?? null;
+  }
+
+  private openWindowOrFail(): ExtensionWindow {
+    const window = this.current();
     if (!window) throw new Error("no browser window is open");
     return window;
   }
